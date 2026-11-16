@@ -6,6 +6,10 @@
 - **Deleted or moved a downloaded file in Finder/Explorer?** Dung now notices. The finish screen and History mark it *wandered off* and offer **Download again**, instead of an Open button that silently did nothing.
 - **Open / Show in folder** on a file that's gone now say so (Show in folder opens its folder instead).
 - If the downloaded update was removed before you pressed **Restart to update**, Dung fetches it again instead of doing nothing.
+- **Magnet links finish properly.** A finished torrent used to sit at 100% saying *rolling* at 0 B/s, because it kept seeding. Dung now stops when the download is done and says *rolled home*.
+- The "[METADATA]" step of a magnet link no longer shows up as its own download; it reads *sniffing it out…* until the real download starts.
+- Multi-file torrents show the torrent's name, and Open / Show in folder go to its folder.
+- Pasting the same torrent again — even as a differently written magnet link — is recognised (*already rolling* / *you already have it*).
 
 ## 1.7.0 — Updates in one click
 

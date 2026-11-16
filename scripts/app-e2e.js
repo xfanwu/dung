@@ -363,6 +363,35 @@ async function main() {
   await sleep(1000);
   check('Download again brings the file back', files().includes('vanish.bin'), JSON.stringify(files()));
 
+  // 16. Magnet link through a local swarm: a finished torrent is "rolled home"
+  //     (not rolling at 100% while it seeds); the metadata step stays hidden
+  await u.clearAll();
+  const { startSwarm } = require('./lib/swarm');
+  const swarm = await startSwarm({ aria2c: ARIA2C, workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dung-swarm-')) });
+  try {
+    await u.ev(() => {
+      window.__shown = new Set();
+      window.api.onUpdate((p) => (p.items || []).forEach((i) => window.__shown.add(`${i.name}|${i.status}`)));
+    });
+    await u.paste(swarm.magnet);
+    await u.waitFor(() => (window.__items || []).some((i) => i.torrent && i.status === 'complete'), null, 60000).catch(() => {});
+    await sleep(3000);
+    const t = (await u.items()).find((i) => i.torrent && i.name === 'swarm-file.bin');
+    check('magnet downloads through the swarm', Boolean(t) && fs.existsSync(path.join(dl, 'swarm-file.bin')) && fs.statSync(path.join(dl, 'swarm-file.bin')).size === swarm.size, JSON.stringify(t));
+    check('finished torrent is complete, not "rolling" while it seeds', Boolean(t) && t.status === 'complete', t && t.status);
+    const label = await u.ev(() => [document.querySelector('#current-name').textContent, document.querySelector('#current-badges').textContent].join(' | '));
+    check('Home says rolled home for it', /swarm-file\.bin/.test(label) && /rolled home/i.test(label), label);
+    const shown = await u.ev(() => [...window.__shown]);
+    check('metadata step never shows as its own finished file', !shown.some((s) => /METADATA/i.test(s)) && !shown.some((s) => /^Torrent info\|complete/.test(s)), JSON.stringify(shown));
+    await u.paste(swarm.magnet.replace(/&dn=[^&]*/, '&dn=other-name'));
+    await sleep(1500);
+    const again = await u.banner();
+    check('same torrent with a different magnet link is recognised', Boolean(again && /already have/i.test(again.text)), JSON.stringify(again));
+  } finally {
+    swarm.stop();
+  }
+  await u.clearAll();
+
   // 14. Restart the app: finished results are old news
   await app.close();
   ({ app, win } = await launch(home));

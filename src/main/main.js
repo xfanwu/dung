@@ -772,7 +772,7 @@ function startEngine() {
     if (aria !== engine) return;
     lastPayload = payload;
     // Once aria2 reports a link, its real status decides whether it is busy.
-    for (const item of payload.items || []) recentAdds.delete(item.url);
+    for (const item of payload.items || []) recentAdds.delete(sourceKey(item.url));
     recordHistory(payload.items);
     inspectDownloads(payload.items);
     detectConflicts(payload.items);
@@ -1142,12 +1142,37 @@ const RUNNING_STATUSES = new Set(['active', 'waiting', 'paused', 'probing']);
 const recentAdds = new Map(); // url -> time we queued it
 const RECENT_MS = 5000;
 
+// The same torrent can be written as many different magnet links (extra
+// trackers, display names, base32 or hex hashes). Compare torrents by their
+// info hash; everything else by the exact URL.
+function base32ToHex(text) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let bits = '';
+  for (const ch of text.toUpperCase()) {
+    const value = alphabet.indexOf(ch);
+    if (value < 0) return '';
+    bits += value.toString(2).padStart(5, '0');
+  }
+  let hex = '';
+  for (let i = 0; i + 4 <= bits.length; i += 4) hex += parseInt(bits.slice(i, i + 4), 2).toString(16);
+  return hex;
+}
+
+function sourceKey(url) {
+  const match = /^magnet:\?.*?xt=urn:btih:([a-z0-9]+)/i.exec(String(url || ''));
+  if (!match) return url;
+  const hash = match[1].length === 32 ? base32ToHex(match[1]) : match[1].toLowerCase();
+  return `btih:${hash}`;
+}
+
+const sameSource = (a, b) => Boolean(a) && Boolean(b) && sourceKey(a) === sourceKey(b);
+
 function isBusyUrl(url) {
-  const at = recentAdds.get(url);
+  const at = recentAdds.get(sourceKey(url));
   if (at && Date.now() - at < RECENT_MS) return true;
-  if ((lastPayload.items || []).some((item) => item.url === url && RUNNING_STATUSES.has(item.status))) return true;
+  if ((lastPayload.items || []).some((item) => sameSource(item.url, url) && RUNNING_STATUSES.has(item.status))) return true;
   for (const job of jobs.values()) {
-    if (job.url === url && RUNNING_STATUSES.has(job.status)) return true;
+    if (sameSource(job.url, url) && RUNNING_STATUSES.has(job.status)) return true;
   }
   return false;
 }
@@ -1157,8 +1182,8 @@ function isBusyUrl(url) {
 // complete file and reports done instantly).
 function alreadyHave(url) {
   const candidates = [
-    ...(lastPayload.items || []).filter((item) => item.url === url && item.status === 'complete'),
-    ...history.filter((entry) => entry.url === url),
+    ...(lastPayload.items || []).filter((item) => sameSource(item.url, url) && item.status === 'complete'),
+    ...history.filter((entry) => sameSource(entry.url, url)),
   ];
   for (const hit of candidates) {
     if (hit.path && fs.existsSync(hit.path)) return { url, name: hit.name || path.basename(hit.path), path: hit.path };
@@ -1212,13 +1237,13 @@ async function addDownloads({ urls, options: rawOptions }, claimed) {
       already.push(have);
       continue;
     }
-    recentAdds.set(url, Date.now());
-    claimed.push(url);
+    recentAdds.set(sourceKey(url), Date.now());
+    claimed.push(sourceKey(url));
 
     const kind = classify(url);
 
     if (kind === 'youtube') {
-      recentAdds.delete(url); // declined, not downloading
+      recentAdds.delete(sourceKey(url)); // declined, not downloading
       skipped.push(url);
       continue;
     }
@@ -1268,8 +1293,8 @@ async function addDownloads({ urls, options: rawOptions }, claimed) {
       duplicates.push(entry.url);
       continue;
     }
-    recentAdds.set(entry.url, Date.now());
-    claimed.push(entry.url);
+    recentAdds.set(sourceKey(entry.url), Date.now());
+    claimed.push(sourceKey(entry.url));
     const target = { dir: settings.dir, ...options };
     if (entry.out) target.out = entry.out;
 
@@ -1341,9 +1366,9 @@ ipcMain.handle('download:resume', (_event, gid) => requireEngine().resume(gid));
 ipcMain.handle('download:remove', async (_event, gid) => {
   // A cancelled link is free to be pasted again right away.
   const gone = (lastPayload.items || []).find((item) => item.gid === gid);
-  if (gone && gone.url) recentAdds.delete(gone.url);
+  if (gone && gone.url) recentAdds.delete(sourceKey(gone.url));
   const job = jobs.get(gid);
-  if (job) recentAdds.delete(job.url);
+  if (job) recentAdds.delete(sourceKey(job.url));
 
   if (String(gid).startsWith('yt:')) return cancelJob(gid);
 
