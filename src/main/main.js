@@ -593,6 +593,27 @@ function externalItems() {
   }));
 }
 
+/* Files can be moved or deleted in Finder/Explorer at any time. Finished
+   downloads and history entries carry `missing` so the UI can say so and
+   offer Download again instead of an Open button that silently does
+   nothing. Results are cached for 2s: broadcasts run every 400ms. */
+const existsCache = new Map(); // path -> { at, exists }
+
+function fileExists(target) {
+  if (!target) return false;
+  const now = Date.now();
+  const hit = existsCache.get(target);
+  if (hit && now - hit.at < 2000) return hit.exists;
+  const exists = fs.existsSync(target);
+  existsCache.set(target, { at: now, exists });
+  if (existsCache.size > 500) existsCache.delete(existsCache.keys().next().value);
+  return exists;
+}
+
+function withPresence(item) {
+  return item.status === 'complete' && item.path ? { ...item, missing: !fileExists(item.path) } : item;
+}
+
 function broadcast(force = false) {
   const now = Date.now();
   if (!force && now - lastBroadcast < 400) return;
@@ -604,9 +625,9 @@ function broadcast(force = false) {
         (item) => !conflicts.has(item.gid) && !hiddenResults.has(item.gid)
       ),
       ...externalItems(),
-    ],
+    ].map(withPresence),
     global: lastPayload.global,
-    history,
+    history: history.map((entry) => ({ ...entry, missing: !fileExists(entry.path) })),
   });
 }
 
@@ -1023,6 +1044,14 @@ ipcMain.handle('update:apply', async () => {
   const { path: installer, phase } = updateState.download;
   if (phase !== 'ready' || !installer) return { ok: false, error: 'The update has not finished downloading yet.' };
 
+  // The downloaded installer was deleted (or cleaned up) since: fetch it again.
+  if (!fs.existsSync(installer)) {
+    writeLog('[update] installer missing; downloading it again');
+    setDownload({ phase: 'idle', version: '' });
+    startUpdateDownload().catch(() => {});
+    return { ok: false, redownloading: true };
+  }
+
   let plan;
   try {
     plan = await prepareUpdate(installer, { isPackaged: app.isPackaged });
@@ -1355,13 +1384,31 @@ ipcMain.handle('dialog:dir', async () => {
   return result.filePaths[0];
 });
 
-ipcMain.handle('shell:reveal', (_event, target) => {
-  if (!target) return false;
-  shell.showItemInFolder(target);
-  return true;
+// Open / Show in folder report a file that is no longer there instead of
+// failing silently (shell.openPath only returns an error string).
+ipcMain.handle('shell:reveal', async (_event, target) => {
+  if (!target) return { ok: false };
+  existsCache.delete(target);
+  if (fileExists(target)) {
+    shell.showItemInFolder(target);
+    return { ok: true };
+  }
+  // The file is gone; its folder is the next most useful thing to show.
+  const folder = path.dirname(target);
+  if (fs.existsSync(folder)) await shell.openPath(folder);
+  broadcast(true);
+  return { ok: false, missing: true };
 });
 
-ipcMain.handle('app:open', (_event, target) => shell.openPath(target));
+ipcMain.handle('app:open', async (_event, target) => {
+  existsCache.delete(target);
+  if (!fileExists(target)) {
+    broadcast(true);
+    return { ok: false, missing: true };
+  }
+  const error = await shell.openPath(target);
+  return error ? { ok: false, error } : { ok: true };
+});
 
 app.whenReady().then(async () => {
   settings = { ...DEFAULTS, ...readJson(file('settings.json'), {}) };

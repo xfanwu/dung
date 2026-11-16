@@ -1997,3 +1997,13 @@ html[data-transition^='history-']::view-transition-new(root) {
 .update-banner.is-ready {
   border-color: var(--text);
 }
+
+/* A finished file that was moved or deleted outside Dung. */
+.badge.gone {
+  color: var(--text-dim);
+  border-style: dashed;
+}
+
+.item[data-missing='true'] .name {
+  color: var(--text-dim);
+}

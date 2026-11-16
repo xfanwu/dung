@@ -343,6 +343,26 @@ async function main() {
   await u.waitFor(() => (window.__items || []).some((i) => i.name === 'after-crash.bin' && i.status === 'complete'), null, 20000).catch(() => {});
   check('downloads work after the crash', files().includes('after-crash.bin'));
 
+  // 15. A finished file deleted in Finder/Explorer
+  await u.clearAll();
+  await u.paste(`${base}/small/vanish.bin`);
+  await u.waitFor(() => (window.__items || []).some((i) => i.name === 'vanish.bin' && i.status === 'complete'), null, 15000);
+  fs.rmSync(path.join(dl, 'vanish.bin'));
+  await u.waitFor(() => /moved or deleted/.test(document.querySelector('#current-meta').textContent), null, 6000).catch(() => {});
+  check('deleted file: finish screen says it was moved or deleted', /moved or deleted/.test(await u.ev(() => document.querySelector('#current-meta').textContent)));
+  check('...and offers Download again instead of Open', await u.ev(() => Boolean(document.querySelector('#stage-actions [data-action="again"]')) && !document.querySelector('#stage-actions [data-action="open"]')));
+  await u.click('#door-handle');
+  await sleep(600);
+  check('History marks it "wandered off"', await u.ev(() => [...document.querySelectorAll('#list .item')].some((row) => /vanish\.bin/.test(row.textContent) && /wandered off/i.test(row.textContent))));
+  const opened = await u.ev(() => window.api.open(document.querySelector('#list .item [data-path]') ? [...document.querySelectorAll('#list [data-path]')].find((b) => /vanish/.test(b.dataset.path)).dataset.path : ''));
+  check('Open on a deleted file reports it instead of failing silently', Boolean(opened && opened.missing), JSON.stringify(opened));
+  await u.click('#door-handle');
+  await sleep(600);
+  await u.click('#stage-actions [data-action="again"]');
+  await u.waitFor(() => (window.__items || []).filter((i) => i.name === 'vanish.bin' && i.status === 'complete').length >= 1 && !/moved or deleted/.test(document.querySelector('#current-meta').textContent), null, 15000).catch(() => {});
+  await sleep(1000);
+  check('Download again brings the file back', files().includes('vanish.bin'), JSON.stringify(files()));
+
   // 14. Restart the app: finished results are old news
   await app.close();
   ({ app, win } = await launch(home));

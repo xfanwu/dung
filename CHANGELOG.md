@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.1 — When a file wanders off
+
+### Fixed
+- **Deleted or moved a downloaded file in Finder/Explorer?** Dung now notices. The finish screen and History mark it *wandered off* and offer **Download again**, instead of an Open button that silently did nothing.
+- **Open / Show in folder** on a file that's gone now say so (Show in folder opens its folder instead).
+- If the downloaded update was removed before you pressed **Restart to update**, Dung fetches it again instead of doing nothing.
+
 ## 1.7.0 — Updates in one click
 
 ### New
