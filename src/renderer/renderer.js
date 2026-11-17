@@ -1054,6 +1054,7 @@ function fillSettingsForm() {
   $('#limit-error').hidden = true;
   $('#set-verify').checked = Boolean(state.settings.verifyDmg);
   $('#set-clip').checked = state.settings.suggestClipboard !== false;
+  $('#set-trackers').checked = state.settings.publicTrackers === true;
   $('#set-binary').value = state.settings.aria2Path || '';
   $('#set-ytdlp').value = state.settings.ytdlpPath || '';
   updateConnHint();
@@ -1372,6 +1373,7 @@ $('#set-limit').addEventListener('change', async (event) => {
 });
 $('#set-verify').addEventListener('change', (event) => save({ verifyDmg: event.target.checked }));
 $('#set-clip').addEventListener('change', (event) => save({ suggestClipboard: event.target.checked }));
+$('#set-trackers').addEventListener('change', (event) => save({ publicTrackers: event.target.checked }));
 $('#set-binary').addEventListener('change', (event) => save({ aria2Path: event.target.value.trim() }));
 $('#set-ytdlp').addEventListener('change', (event) => save({ ytdlpPath: event.target.value.trim() }));
 
