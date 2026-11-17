@@ -86,16 +86,38 @@ const num = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+function magnetFor(raw) {
+  return raw.infoHash ? `magnet:?xt=urn:btih:${String(raw.infoHash).toLowerCase()}` : '';
+}
+
 function normalize(raw, meta = {}) {
   const file = raw.files && raw.files[0] ? raw.files[0] : {};
-  const filePath = file.path || '';
-  const uri = (file.uris && file.uris[0] && file.uris[0].uri) || '';
+  const bt = raw.bittorrent || null;
+  const torrentName = bt && bt.info && bt.info.name;
+  // A torrent's own name and folder (multi-file torrents live in a folder).
+  const filePath = torrentName && raw.dir ? path.join(raw.dir, torrentName) : file.path || '';
+  const uri = (file.uris && file.uris[0] && file.uris[0].uri) || magnetFor(raw);
+
+  let status = raw.status;
+  let name = filePath ? path.basename(filePath) : decodeURIComponent(uri.split('/').pop() || 'unknown');
+  const total = num(raw.totalLength);
+  const completed = num(raw.completedLength);
+
+  if (bt && !torrentName) {
+    // Magnet link, first step: fetching the torrent's metadata from peers.
+    if (status === 'active' || status === 'waiting') status = 'probing';
+    name = 'Torrent info';
+  } else if (bt && status === 'active' && (raw.seeder === 'true' || (total > 0 && completed >= total))) {
+    // Finished and only seeding: for Dung that is done.
+    status = 'complete';
+  }
+
   return {
     gid: raw.gid,
-    status: raw.status,
-    totalLength: num(raw.totalLength),
-    completedLength: num(raw.completedLength),
-    downloadSpeed: num(raw.downloadSpeed),
+    status,
+    totalLength: total,
+    completedLength: completed,
+    downloadSpeed: status === 'complete' ? 0 : num(raw.downloadSpeed),
     connections: num(raw.connections),
     split: meta.split || 0,
     maxConnectionPerServer: meta.maxConnectionPerServer || 0,
@@ -104,7 +126,8 @@ function normalize(raw, meta = {}) {
     dir: raw.dir || '',
     path: filePath,
     url: uri,
-    name: filePath ? path.basename(filePath) : decodeURIComponent(uri.split('/').pop() || 'unknown'),
+    name,
+    torrent: Boolean(bt),
   };
 }
 
@@ -170,6 +193,10 @@ class Aria2 extends EventEmitter {
       `--max-overall-download-limit=${options.globalLimit || '0'}`,
       '--check-certificate=true',
       '--follow-torrent=mem',
+      // Stop seeding as soon as a torrent finishes. aria2's default seeds until
+      // the upload ratio reaches 1.0, which with few peers is never: the
+      // download then stays "active" at 100% with 0 B/s forever.
+      '--seed-time=0',
     ];
 
     if (options.sessionFile) {
@@ -281,7 +308,9 @@ class Aria2 extends EventEmitter {
       ]);
 
       this.emit('update', {
-        items: [...active, ...waiting, ...stopped].map((raw) =>
+        // A finished magnet metadata step hands over to a new download
+        // (followedBy); showing it would look like a second, empty file.
+        items: [...active, ...waiting, ...stopped].filter((raw) => !(raw.followedBy && raw.followedBy.length && raw.status === 'complete')).map((raw) =>
           normalize(raw, this.meta.get(raw.gid) || {
             split: this.defaultSplit,
             maxConnectionPerServer: this.defaultConnections,

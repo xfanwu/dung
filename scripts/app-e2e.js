@@ -163,6 +163,7 @@ async function exposeItems(win) {
   await win.evaluate(() => {
     window.api.onUpdate((payload) => {
       window.__items = payload.items || [];
+      window.__lastHistory = payload.history || [];
     });
   });
 }
@@ -342,6 +343,126 @@ async function main() {
   await u.paste(`${base}/small/after-crash.bin`);
   await u.waitFor(() => (window.__items || []).some((i) => i.name === 'after-crash.bin' && i.status === 'complete'), null, 20000).catch(() => {});
   check('downloads work after the crash', files().includes('after-crash.bin'));
+
+  // 15. A finished file deleted in Finder/Explorer
+  await u.clearAll();
+  await u.paste(`${base}/small/vanish.bin`);
+  await u.waitFor(() => (window.__items || []).some((i) => i.name === 'vanish.bin' && i.status === 'complete'), null, 15000);
+  fs.rmSync(path.join(dl, 'vanish.bin'));
+  await u.waitFor(() => /moved or deleted/.test(document.querySelector('#current-meta').textContent), null, 6000).catch(() => {});
+  check('deleted file: finish screen says it was moved or deleted', /moved or deleted/.test(await u.ev(() => document.querySelector('#current-meta').textContent)));
+  check('...and offers Download again instead of Open', await u.ev(() => Boolean(document.querySelector('#stage-actions [data-action="again"]')) && !document.querySelector('#stage-actions [data-action="open"]')));
+  await u.click('#door-handle');
+  await sleep(600);
+  check('History marks it "wandered off"', await u.ev(() => [...document.querySelectorAll('#list .item')].some((row) => /vanish\.bin/.test(row.textContent) && /wandered off/i.test(row.textContent))));
+  const opened = await u.ev(() => window.api.open(document.querySelector('#list .item [data-path]') ? [...document.querySelectorAll('#list [data-path]')].find((b) => /vanish/.test(b.dataset.path)).dataset.path : ''));
+  check('Open on a deleted file reports it instead of failing silently', Boolean(opened && opened.missing), JSON.stringify(opened));
+  await u.click('#door-handle');
+  await sleep(600);
+  await u.click('#stage-actions [data-action="again"]');
+  await u.waitFor(() => (window.__items || []).filter((i) => i.name === 'vanish.bin' && i.status === 'complete').length >= 1 && !/moved or deleted/.test(document.querySelector('#current-meta').textContent), null, 15000).catch(() => {});
+  await sleep(1000);
+  check('Download again brings the file back', files().includes('vanish.bin'), JSON.stringify(files()));
+
+  // 16. Magnet link through a local swarm: a finished torrent is "rolled home"
+  //     (not rolling at 100% while it seeds); the metadata step stays hidden
+  await u.clearAll();
+  const { startSwarm } = require('./lib/swarm');
+  const swarm = await startSwarm({ aria2c: ARIA2C, workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dung-swarm-')) });
+  try {
+    await u.ev(() => {
+      window.__shown = new Set();
+      window.api.onUpdate((p) => (p.items || []).forEach((i) => window.__shown.add(`${i.name}|${i.status}`)));
+    });
+    await u.paste(swarm.magnet);
+    await u.waitFor(() => (window.__items || []).some((i) => i.torrent && i.status === 'complete'), null, 60000).catch(() => {});
+    await sleep(3000);
+    const t = (await u.items()).find((i) => i.torrent && i.name === 'swarm-file.bin');
+    check('magnet downloads through the swarm', Boolean(t) && fs.existsSync(path.join(dl, 'swarm-file.bin')) && fs.statSync(path.join(dl, 'swarm-file.bin')).size === swarm.size, JSON.stringify(t));
+    check('finished torrent is complete, not "rolling" while it seeds', Boolean(t) && t.status === 'complete', t && t.status);
+    const label = await u.ev(() => [document.querySelector('#current-name').textContent, document.querySelector('#current-badges').textContent].join(' | '));
+    check('Home says rolled home for it', /swarm-file\.bin/.test(label) && /rolled home/i.test(label), label);
+    const shown = await u.ev(() => [...window.__shown]);
+    check('metadata step never shows as its own finished file', !shown.some((s) => /METADATA/i.test(s)) && !shown.some((s) => /^Torrent info\|complete/.test(s)), JSON.stringify(shown));
+    await u.paste(swarm.magnet.replace(/&dn=[^&]*/, '&dn=other-name'));
+    await sleep(1500);
+    const again = await u.banner();
+    check('same torrent with a different magnet link is recognised', Boolean(again && /already have/i.test(again.text)), JSON.stringify(again));
+  } finally {
+    swarm.stop();
+  }
+  await u.clearAll();
+
+  // 17. Average speed counts active time only (a pause doesn't drag it down)
+  await u.clearAll();
+  await u.paste(`${base}/slow/timed.bin`);
+  await u.waitFor(() => (window.__items || []).some((i) => i.name === 'timed.bin' && i.status === 'active' && i.completedLength > 1e6), null, 15000);
+  const timedGid = (await u.items()).find((i) => i.name === 'timed.bin').gid;
+  const t0 = Date.now();
+  await u.ev((gid) => window.api.pause(gid), timedGid);
+  await sleep(4000);
+  await u.ev((gid) => window.api.resume(gid), timedGid);
+  await u.waitFor(() => (window.__items || []).some((i) => i.name === 'timed.bin' && i.status === 'complete'), null, 60000);
+  await sleep(1500);
+  const timed = await u.ev(() => (window.__lastHistory || []).find((e) => e.name === 'timed.bin'));
+  const speed = timed && timed.avgSpeed;
+  check('History records the average speed', Boolean(speed), JSON.stringify(timed));
+  // The test server sends ~640 KB/s; a wall-clock average would include the 4s pause.
+  check('...counting only active time (pause excluded)', speed > 450 * 1024 && speed < 900 * 1024 && timed.activeMs < Date.now() - t0, `${Math.round((speed || 0) / 1024)} KB/s over ${timed && timed.activeMs}ms`);
+
+  // 18. Remove from list keeps the file; Move to Trash + Undo keeps it; Move to Trash moves it
+  const trashDir = path.join(home, '.local', 'share', 'Trash', 'files');
+  const inTrash = (name) => fs.existsSync(trashDir) && fs.readdirSync(trashDir).some((f) => f.startsWith(name.replace(/\.bin$/, '')));
+  await u.ev(() => document.querySelector('#stage-actions [data-action="remove"]').click());
+  await sleep(1500);
+  check('Remove from list keeps the file on disk', files().includes('timed.bin'));
+  await u.click('#door-handle');
+  await sleep(600);
+  const trashBtn = () => u.ev(() => { const r = [...document.querySelectorAll('#list .item')].find((x) => /timed\.bin/.test(x.textContent)); r.querySelector('[data-action="trash"]').click(); });
+  await trashBtn();
+  await sleep(500);
+  check('Move to Trash hides it at once', !(await u.ev(() => [...document.querySelectorAll('#list .item')].some((x) => /timed\.bin/.test(x.textContent)))));
+  await u.click('#note-undo');
+  await sleep(8000);
+  check('Undo keeps the file and brings the entry back', files().includes('timed.bin') && (await u.ev(() => [...document.querySelectorAll('#list .item')].some((x) => /timed\.bin/.test(x.textContent)))));
+  await trashBtn();
+  await sleep(8500);
+  check('without Undo, the file goes to the Trash', !files().includes('timed.bin') && inTrash('timed.bin'), JSON.stringify(files()));
+  check('...and leaves the list', !(await u.ev(() => [...document.querySelectorAll('#list .item')].some((x) => /timed\.bin/.test(x.textContent)))));
+  await u.click('#door-handle');
+  await sleep(600);
+
+  // 19. Cancel moves the partial file and its .aria2 progress file to the Trash
+  await u.paste(`${base}/slow/partial.bin`);
+  await u.waitFor(() => (window.__items || []).some((i) => i.name === 'partial.bin' && i.completedLength > 5e5), null, 15000);
+  check('a running download has a partial file and .aria2', fs.existsSync(path.join(dl, 'partial.bin')) && fs.existsSync(path.join(dl, 'partial.bin.aria2')));
+  await u.ev(() => window.api.remove((window.__items || []).find((i) => i.name === 'partial.bin').gid));
+  await sleep(2500);
+  check('Cancel trashes the partial and its .aria2', !fs.existsSync(path.join(dl, 'partial.bin')) && !fs.existsSync(path.join(dl, 'partial.bin.aria2')) && inTrash('partial.bin'), JSON.stringify(fs.readdirSync(dl)));
+
+  // 20. Copied links are offered once, only when they look like downloads
+  const offers = [];
+  await win.exposeFunction('__offer', (x) => offers.push(x));
+  await u.ev(() => window.api.onClipboardLink((x) => window.__offer(x.url)));
+  const copyAndFocus = (text) => app.evaluate(({ clipboard, BrowserWindow }, t) => { clipboard.writeText(t); BrowserWindow.getAllWindows()[0].emit('focus'); }, text);
+  await copyAndFocus(`${base}/small/copied.zip`);
+  await sleep(800);
+  check('a copied file link is offered', offers.includes(`${base}/small/copied.zip`) && (await u.ev(() => !document.querySelector('#clip-chip').hidden)), JSON.stringify(offers));
+  await copyAndFocus(`${base}/small/copied.zip`);
+  await sleep(800);
+  check('...only once', offers.filter((x) => x.endsWith('copied.zip')).length === 1);
+  await copyAndFocus('https://example.com/news/today');
+  await sleep(800);
+  check('a copied web page is not offered', !offers.includes('https://example.com/news/today'));
+  await u.click('#clip-go');
+  await u.waitFor(() => (window.__items || []).some((i) => i.name === 'copied.zip' && i.status === 'complete'), null, 15000).catch(() => {});
+  check('one click on the chip downloads it', files().includes('copied.zip'));
+  await u.ev(() => window.api.updateSettings({ suggestClipboard: false }));
+  await copyAndFocus(`${base}/small/off.zip`);
+  await sleep(800);
+  check('Settings can turn suggestions off', !offers.some((x) => x.endsWith('off.zip')));
+  await u.ev(() => window.api.updateSettings({ suggestClipboard: true }));
+  await u.clearAll();
 
   // 14. Restart the app: finished results are old news
   await app.close();

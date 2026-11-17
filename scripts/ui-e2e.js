@@ -37,6 +37,9 @@ const check = (name, ok, extra='') => { console.log(`${ok ? 'PASS' : 'FAIL'} ${n
       updateSettings: (patch) => { window.__calls.push(['settings', patch]); return Promise.resolve({ dir: '/d', ...patch }); },
       onUpdate: sub('update'), onStatus: sub('status'), onUpdateStatus: sub('us'), onUpdateProgress: sub('up'),
       onOpenSettings: sub('os'), onView: sub('view'), onConflict: sub('conflict'), onVerify: sub('verify'), onLog: sub('log'),
+      onClipboardLink: sub('clip'), onTrashFailed: sub('trashfail'),
+      trash: (p) => { window.__calls.push(['trash', p]); return Promise.resolve({ ok: true, token: 't1', delay: 7000 }); },
+      untrash: (t) => { window.__calls.push(['untrash', t]); return Promise.resolve({ ok: true }); },
     };
     // drop view transitions in this harness so DOM updates are synchronous
     document.startViewTransition = undefined;
@@ -237,6 +240,40 @@ const check = (name, ok, extra='') => { console.log(`${ok ? 'PASS' : 'FAIL'} ${n
   check('Later hides the banner for this version', !(await bannerState()).shown);
   check('...but Settings still offers it', (await bannerState()).settings === 'Restart to update');
   await up({ updateAvailable: false, status: 'done', manual: false, download: { phase: 'idle' } });
+
+  // 20. History: average speed over active time
+  await ev(() => window.__emit('update', { items: [], history: [
+    { id: 'h1', name: 'big.iso', path: '/d/big.iso', size: 5.6e9, url: 'https://e.com/big.iso', finishedAt: Date.now(), activeMs: 312000, avgSpeed: Math.round(5.6e9 / 312) },
+    { id: 'h2', name: 'old.zip', path: '/d/old.zip', size: 1e6, url: 'https://e.com/old.zip', finishedAt: Date.now() },
+  ] }));
+  await ev(() => document.querySelector('#door-handle').click());
+  const metas = await ev(() => [...document.querySelectorAll('#list .item')].map((r) => r.querySelector('.meta').textContent));
+  check('History shows average speed and active time', metas.some((m) => /big|5\.\d GB/.test(m) && /avg 17\.\d MB\/s · 5m 12s/.test(m)), JSON.stringify(metas));
+  check('older entries without timing show no speed', metas.some((m) => /^9\d\d(\.\d)? KB · /.test(m) && !/avg/.test(m)), JSON.stringify(metas));
+
+  // 21. Remove from list vs Move to Trash, with Undo
+  const row = () => ev(() => [...document.querySelectorAll('#list .item')].find((r) => /big\.iso/.test(r.textContent)));
+  check('History rows have Move to Trash and a separate Remove from list', await ev(() => {
+    const r = [...document.querySelectorAll('#list .item')].find((x) => /big\.iso/.test(x.textContent));
+    return Boolean(r.querySelector('[data-action="trash"]')) && r.querySelector('[data-action="forget"]').getAttribute('aria-label') === 'Remove from list';
+  }));
+  await ev(() => [...document.querySelectorAll('#list .item')].find((x) => /big\.iso/.test(x.textContent)).querySelector('[data-action="trash"]').click());
+  await p.waitForTimeout(50);
+  check('Move to Trash asks the main process to trash that file', (await ev(() => JSON.stringify(window.__calls.at(-1)))) === '["trash","/d/big.iso"]');
+  check('...and offers Undo', await ev(() => /Moved “big\.iso” to the Trash/.test(document.querySelector('#error-text').textContent) && !document.querySelector('#note-undo').hidden));
+  await ev(() => document.querySelector('#note-undo').click());
+  await p.waitForTimeout(30);
+  check('Undo cancels the move', (await ev(() => JSON.stringify(window.__calls.at(-1)))) === '["untrash","t1"]');
+  await ev(() => document.querySelector('#door-handle').click());
+
+  // 22. Copied-link chip
+  await ev(() => window.__emit('clip', { url: 'https://e.com/files/report.pdf', name: 'report.pdf' }));
+  check('a copied download link shows as a chip', await ev(() => !document.querySelector('#clip-chip').hidden && document.querySelector('#clip-name').textContent === 'report.pdf'));
+  const addsBefore = await ev(() => window.__calls.filter((c) => c[0] === 'add').length);
+  await ev(() => { window.api.add = (urls) => { window.__calls.push(['add', urls]); return Promise.resolve({ gids: ['z'] }); }; document.querySelector('#clip-go').click(); });
+  await p.waitForTimeout(50);
+  check('one click on the chip downloads it', (await ev(() => JSON.stringify(window.__calls.filter((c) => c[0] === 'add').at(-1)))) === '["add",["https://e.com/files/report.pdf"]]' && (await ev(() => window.__calls.filter((c) => c[0] === 'add').length)) === addsBefore + 1);
+  check('...and the chip goes away', await ev(() => document.querySelector('#clip-chip').hidden));
 
   // 11. Escape closes unsupported modal
   await ev(() => showUnsupported());

@@ -36,6 +36,7 @@
         <span id="error-text"></span>
         <button id="error-reveal" class="mini" hidden>Show file</button>
         <button id="note-again" class="mini" hidden>Download again</button>
+        <button id="note-undo" class="mini" hidden>Undo</button>
         <button id="install-ytdlp" class="mini" hidden>Add video support</button>
       </div>
 
@@ -73,6 +74,12 @@
         />
         <button id="add-btn" class="primary" disabled>Download</button>
       </section>
+        <div id="clip-chip" class="clip-chip" hidden role="status">
+          <span class="clip-text">Copied: <b id="clip-name"></b></span>
+          <button id="clip-go" class="pill">Download</button>
+          <button id="clip-x" class="mini quiet" title="Not now" aria-label="Dismiss">✕</button>
+        </div>
+
         <p class="paste-hint">Just press <kbd id="paste-key">⌘V</kbd> — it starts by itself.</p>
 
 
@@ -165,6 +172,14 @@
                 <em id="limit-error" class="field-error" hidden>Use a number like 500 KB/s or 5 MB/s.</em>
               </span>
               <input id="set-limit" type="text" placeholder="No limit" class="option-input" inputmode="decimal" spellcheck="false" />
+            </label>
+
+            <label class="option">
+              <span class="option-text">
+                <strong>Suggest copied links</strong>
+                <em>When you switch to Dung, offer a download link you just copied.</em>
+              </span>
+              <input id="set-clip" type="checkbox" class="switch" />
             </label>
 
             <label class="option" id="verify-field">

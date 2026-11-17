@@ -44,6 +44,20 @@ function eta(remaining, speed) {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+// "5m 12s", "1h 3m", "42s"
+function duration(ms) {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+// Average speed over the time it was actually downloading (pauses excluded).
+function speedLine(item) {
+  return item.avgSpeed ? `avg ${bytes(item.avgSpeed)}/s · ${duration(item.activeMs)}` : '';
+}
+
 function escapeHtml(value = '') {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -71,6 +85,8 @@ const WORDS = {
   home: 'rolled home',
   dropped: 'dropped',
   saved: 'in the burrow',
+  gone: 'wandered off',
+  goneMeta: 'moved or deleted',
   idle: 'all quiet',
   emptyHistory: 'Nothing rolled in yet.',
 };
@@ -106,7 +122,8 @@ function liveRow(item) {
   } else if (status === 'paused') {
     parts.push(`${Math.round(percent)}% of ${bytes(item.totalLength)}`);
   } else if (status === 'complete') {
-    parts.push(bytes(item.totalLength));
+    parts.push(item.missing ? WORDS.goneMeta : bytes(item.totalLength));
+    if (!item.missing && item.avgSpeed) parts.push(speedLine(item));
   } else {
     parts.push(shortError(item.errorMessage) || `error code ${item.errorCode}`);
   }
@@ -119,19 +136,26 @@ function liveRow(item) {
     buttons.push(`<button class="mini" data-action="resume" data-gid="${item.gid}">Resume</button>`);
   }
   if (status === 'complete' || status === 'error') {
-    if (item.path && status === 'complete') {
-      buttons.push(`<button class="mini strong" data-action="open" data-path="${escapeHtml(item.path)}">Open</button>`);
+    if (item.missing) {
+      if (item.url) buttons.push(`<button class="mini strong" data-action="again" ${fileAttrs(item)}>Download again</button>`);
+    } else {
+      if (item.path && status === 'complete') {
+        buttons.push(`<button class="mini strong" data-action="open" ${fileAttrs(item)}>Open</button>`);
+      }
+      if (item.path) {
+        buttons.push(`<button class="mini" data-action="reveal" ${fileAttrs(item)}>Show in folder</button>`);
+      }
+      if (item.path && status === 'complete') {
+        buttons.push(`<button class="mini" data-action="trash" ${fileAttrs(item)} title="Move the file to the Trash (you can undo)">Move to Trash</button>`);
+      }
     }
-    if (item.path) {
-      buttons.push(`<button class="mini" data-action="reveal" data-path="${escapeHtml(item.path)}">Show in folder</button>`);
-    }
-    buttons.push(`<button class="mini danger" data-action="remove" data-gid="${item.gid}">Remove</button>`);
+    buttons.push(`<button class="mini quiet" data-action="remove" data-gid="${item.gid}" title="Remove from list (keeps the file)" aria-label="Remove from list">✕</button>`);
   } else {
-    buttons.push(`<button class="mini danger" data-action="remove" data-gid="${item.gid}">Cancel</button>`);
+    buttons.push(`<button class="mini danger" data-action="remove" data-gid="${item.gid}" title="Stop it and move the partial file to the Trash">Cancel</button>`);
   }
 
   const check = state.verification.get(item.gid);
-  let badge = `<span class="badge">${label}</span>`;
+  let badge = item.missing ? `<span class="badge gone">${WORDS.gone}</span>` : `<span class="badge">${label}</span>`;
   if (item.extractor === 'yt-dlp') {
     badge += '<span class="badge accent">video</span>';
   } else if (status === 'active') {
@@ -161,6 +185,11 @@ function liveRow(item) {
     </div>`;
 }
 
+// data-* attributes for buttons that act on a file (path, name, source url).
+function fileAttrs(item) {
+  return `data-path="${escapeHtml(item.path || '')}" data-name="${escapeHtml(item.name || '')}" data-url="${escapeHtml(item.url || '')}"`;
+}
+
 function historyRow(entry) {
   const when = new Date(entry.finishedAt).toLocaleString([], {
     month: 'short',
@@ -169,18 +198,26 @@ function historyRow(entry) {
     minute: '2-digit',
   });
 
+  const file = fileAttrs(entry);
+  // Deleted or moved in Finder/Explorer since: say so, offer to fetch it again.
+  const actions = entry.missing
+    ? (entry.url ? `<button class="mini strong" data-action="again" ${file}>Download again</button>` : '')
+    : `<button class="mini strong" data-action="open" ${file}>Open</button>` +
+      `<button class="mini" data-action="reveal" ${file}>Show in folder</button>` +
+      `<button class="mini" data-action="trash" ${file} title="Move the file to the Trash (you can undo)">Move to Trash</button>`;
+  const meta = [entry.missing ? WORDS.goneMeta : bytes(entry.size), entry.missing ? '' : speedLine(entry), when].filter(Boolean).join(' · ');
+
   return `
-    <div class="item" data-status="complete">
+    <div class="item" data-status="complete"${entry.missing ? ' data-missing="true"' : ''}>
       <div class="item-top">
         <span class="name" title="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</span>
-        <span class="meta">${bytes(entry.size)} · ${escapeHtml(when)}</span>
+        <span class="meta">${escapeHtml(meta)}</span>
       </div>
       <div class="item-bottom">
-        <span class="badge">${WORDS.saved}</span>
+        <span class="badge${entry.missing ? ' gone' : ''}">${entry.missing ? WORDS.gone : WORDS.saved}</span>
         <span class="spacer"></span>
-        <button class="mini strong" data-action="open" data-path="${escapeHtml(entry.path)}">Open</button>
-        <button class="mini" data-action="reveal" data-path="${escapeHtml(entry.path)}">Show in folder</button>
-        <button class="mini quiet" data-action="forget" data-id="${entry.id}" title="Remove from history">✕</button>
+        ${actions}
+        <button class="mini quiet" data-action="forget" data-id="${entry.id}" title="Remove from list (keeps the file)" aria-label="Remove from list">✕</button>
       </div>
     </div>`;
 }
@@ -264,7 +301,7 @@ function laneMeta(item) {
   if (item.status === 'waiting') return WORDS.inLine;
   if (item.status === 'probing') return WORDS.sniffing;
   if (item.status === 'paused') return WORDS.resting;
-  if (item.status === 'complete') return WORDS.home;
+  if (item.status === 'complete') return item.missing ? WORDS.gone : WORDS.home;
   if (item.status === 'error') return shortError(item.errorMessage) || WORDS.dropped;
   const pct = item.totalLength ? Math.floor((item.completedLength / item.totalLength) * 100) : 0;
   return item.downloadSpeed ? `${pct}%  ·  ${bytes(item.downloadSpeed)}/s` : `${pct}%`;
@@ -273,8 +310,12 @@ function laneMeta(item) {
 function laneActions(item) {
   const gid = item.gid;
   const path = escapeHtml(item.path || '');
+  if (item.status === 'complete' && item.missing) {
+    return (item.url ? `<button class="mini strong" data-action="again" ${fileAttrs(item)}>Download again</button>` : '') +
+      `<button class="mini quiet" data-action="remove" data-gid="${gid}" title="Dismiss">✕</button>`;
+  }
   if (item.status === 'complete' && item.path) {
-    return `<button class="mini strong" data-action="open" data-path="${path}">Open</button>` +
+    return `<button class="mini strong" data-action="open" ${fileAttrs(item)}>Open</button>` +
       `<button class="mini quiet" data-action="remove" data-gid="${gid}" title="Dismiss">✕</button>`;
   }
   if (item.status === 'paused') {
@@ -343,7 +384,10 @@ function stageMeta(item) {
   if (item.status === 'probing') {
     return item.slow ? WORDS.sniffingSlow : WORDS.sniffing;
   }
-  if (item.status === 'complete') return bytes(item.totalLength);
+  if (item.status === 'complete') {
+    if (item.missing) return `${bytes(item.totalLength)} · ${WORDS.goneMeta}`;
+    return item.avgSpeed ? `${bytes(item.totalLength)} · avg ${bytes(item.avgSpeed)}/s in ${duration(item.activeMs)}` : bytes(item.totalLength);
+  }
   if (item.status === 'error') return shortError(item.errorMessage) || WORDS.dropped;
   if (item.status === 'paused') return WORDS.resting;
 
@@ -434,8 +478,8 @@ function updateStage() {
   $('#current-name').title = item.path || item.name;
   $('#current-meta').textContent = stageMeta(item);
 
-  const label = STATUS_LABEL[item.status] || item.status;
-  let badges = `<span class="badge">${label}</span>`;
+  const label = item.missing ? WORDS.gone : STATUS_LABEL[item.status] || item.status;
+  let badges = `<span class="badge${item.missing ? ' gone' : ''}">${label}</span>`;
   if (item.status === 'complete') {
     const check = state.verification.get(item.gid);
     if (check) {
@@ -460,11 +504,18 @@ function setHtml(node, html) {
 function stageActions(item) {
   const path = escapeHtml(item.path || '');
   const gid = item.gid;
+  if (item.status === 'complete' && item.missing) {
+    return (
+      (item.url ? `<button class="primary" data-action="again" ${fileAttrs(item)}>Download again</button>` : '') +
+      `<button class="link-btn" data-action="remove" data-gid="${gid}">Done</button>`
+    );
+  }
   if (item.status === 'complete') {
     return (
-      (item.path ? `<button class="primary" data-action="open" data-path="${path}">Open</button>` +
-        `<button class="ghost" data-action="reveal" data-path="${path}">Show in folder</button>` : '') +
-      `<button class="link-btn" data-action="remove" data-gid="${gid}">Done</button>`
+      (item.path ? `<button class="primary" data-action="open" ${fileAttrs(item)}>Open</button>` +
+        `<button class="ghost" data-action="reveal" ${fileAttrs(item)}>Show in folder</button>` +
+        `<button class="link-btn" data-action="trash" ${fileAttrs(item)} title="Move the file to the Trash (you can undo)">Move to Trash</button>` : '') +
+      `<button class="link-btn" data-action="remove" data-gid="${gid}" title="Remove from list (keeps the file)">Done</button>`
     );
   }
   if (item.status === 'error') {
@@ -663,8 +714,34 @@ async function runAction(event) {
       await window.api.remove(gid);
       state.verification.delete(gid);
     }
-    if (action === 'reveal') await window.api.reveal(path);
-    if (action === 'open') await window.api.open(path);
+    if (action === 'open' || action === 'reveal') {
+      const result = action === 'open' ? await window.api.open(path) : await window.api.reveal(path);
+      if (result && result.missing) {
+        const name = button.dataset.name || path.split(/[\\/]/).pop();
+        showNote(`“${name}” isn’t there anymore — it was moved or deleted.`);
+        if (button.dataset.url) {
+          againUrls = [button.dataset.url];
+          $('#note-again').hidden = false;
+        }
+      } else if (result && result.error) {
+        showError(result.error);
+      }
+    }
+    if (action === 'trash' && path) {
+      const result = await window.api.trash(path);
+      if (result && result.ok) {
+        const name = button.dataset.name || path.split(/[\\/]/).pop();
+        showNote(`Moved “${name}” to the Trash.`);
+        trashToken = result.token;
+        $('#note-undo').hidden = false;
+        clearTimeout(errorTimer);
+        errorTimer = setTimeout(hideError, Math.max(1000, (result.delay || 7000) - 800));
+      }
+    }
+    if (action === 'again' && button.dataset.url) {
+      if (state.ui.historyOpen) showView('home');
+      await window.api.add([button.dataset.url], { again: true });
+    }
     if (action === 'forget') {
       state.history = await window.api.forgetHistory(id);
       render();
@@ -701,6 +778,32 @@ let pendingSubmit = false;
 function syncAddBtn() {
   $('#add-btn').disabled = !engineOk || !$('#url-input').value.trim();
 }
+
+// A download link the user copied elsewhere, offered when Dung gets focus.
+let clipUrl = '';
+
+function hideClip() {
+  clipUrl = '';
+  $('#clip-chip').hidden = true;
+}
+
+window.api.onClipboardLink(({ url, name }) => {
+  clipUrl = url;
+  $('#clip-name').textContent = name;
+  $('#clip-name').title = url;
+  $('#clip-chip').hidden = false;
+});
+
+$('#clip-go').addEventListener('click', () => {
+  const url = clipUrl;
+  hideClip();
+  if (!url) return;
+  if (state.ui.historyOpen) showView('home');
+  $('#url-input').value = url;
+  submit();
+});
+
+$('#clip-x').addEventListener('click', hideClip);
 
 // ⌘V / Ctrl+V anywhere on the page works too, even if the box isn't focused.
 document.addEventListener('paste', (event) => {
@@ -756,6 +859,7 @@ async function submit() {
   const input = $('#url-input');
   const raw = input.value.trim();
   if (!raw) return;
+  if (clipUrl && raw.includes(clipUrl)) hideClip();
 
   const urls = raw.split(/\s+/).filter((url) => /^(https?:\/\/|ftp:\/\/|magnet:\?|thunder:\/\/)/i.test(url));
   if (!urls.length) {
@@ -832,6 +936,7 @@ function showError(message) {
   const banner = $('#error-banner');
   banner.classList.remove('is-note');
   $('#note-again').hidden = true;
+  $('#note-undo').hidden = true;
   const described = describeError(message);
   errorRevealPath = described.reveal;
   $('#error-text').textContent = described.text;
@@ -885,6 +990,15 @@ function showNote(message, revealPath = '') {
 // "Download again" from the already-have note: a fresh copy saved next to
 // the existing file (never over it).
 let againUrls = [];
+let trashToken = '';
+
+$('#note-undo').addEventListener('click', async () => {
+  const token = trashToken;
+  hideError();
+  if (token) await window.api.untrash(token);
+});
+
+window.api.onTrashFailed(({ error }) => showError(`Couldn’t move it to the Trash: ${error}`));
 $('#note-again').addEventListener('click', async () => {
   const urls = againUrls;
   hideError();
@@ -899,6 +1013,8 @@ $('#note-again').addEventListener('click', async () => {
 
 function hideError() {
   againUrls = [];
+  trashToken = '';
+  $('#note-undo').hidden = true;
   $('#note-again').hidden = true;
   $('#error-banner').classList.remove('is-note');
   $('#error-banner').hidden = true;
@@ -937,6 +1053,7 @@ function fillSettingsForm() {
   $('#set-limit').classList.remove('invalid');
   $('#limit-error').hidden = true;
   $('#set-verify').checked = Boolean(state.settings.verifyDmg);
+  $('#set-clip').checked = state.settings.suggestClipboard !== false;
   $('#set-binary').value = state.settings.aria2Path || '';
   $('#set-ytdlp').value = state.settings.ytdlpPath || '';
   updateConnHint();
@@ -1096,6 +1213,7 @@ async function runUpdateAction(event) {
       const result = await window.api.applyUpdate();
       if (result && result.manual) window.api.openExternal(result.pageUrl || 'https://github.com/xfanwu/dung/releases/latest');
       else if (result && result.opened) $('#update-note').textContent = 'The installer is open — follow it to finish.';
+      else if (result && result.redownloading) $('#update-note').textContent = 'The downloaded update was removed — getting it again.';
     }
   } catch (err) {
     $('#update-note').textContent = err.message;
@@ -1253,6 +1371,7 @@ $('#set-limit').addEventListener('change', async (event) => {
   field.value = formatSpeedLimit(parsed);
 });
 $('#set-verify').addEventListener('change', (event) => save({ verifyDmg: event.target.checked }));
+$('#set-clip').addEventListener('change', (event) => save({ suggestClipboard: event.target.checked }));
 $('#set-binary').addEventListener('change', (event) => save({ aria2Path: event.target.value.trim() }));
 $('#set-ytdlp').addEventListener('change', (event) => save({ ytdlpPath: event.target.value.trim() }));
 
