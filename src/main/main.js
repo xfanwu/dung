@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron');
 
 // Chrome developer tools: available in development (npm start) and when a
 // release is launched with DUNG_DEVTOOLS=1; disabled for everyone else.
@@ -30,6 +30,7 @@ const DEFAULTS = {
   verifyDmg: true,
   aria2Path: '',
   ytdlpPath: '',
+  suggestClipboard: true,
 };
 
 let settings = { ...DEFAULTS };
@@ -174,6 +175,9 @@ function createWindow() {
     },
   });
 
+  win.on('focus', () => setTimeout(checkClipboard, 150));
+  win.webContents.once('did-finish-load', () => setTimeout(checkClipboard, 1200));
+
   win.webContents.on('console-message', (_event, level, message) => {
     writeLog(`[renderer:${level}] ${message}`);
   });
@@ -199,7 +203,10 @@ function createWindow() {
     win.webContents.on('preload-error', (_event, preloadPath, error) => {
       console.log(`[smoke] PRELOAD ERROR ${preloadPath}: ${error.message}`);
     });
-    win.webContents.on('console-message', (_event, level, message) => {
+    win.on('focus', () => setTimeout(checkClipboard, 150));
+  win.webContents.once('did-finish-load', () => setTimeout(checkClipboard, 1200));
+
+  win.webContents.on('console-message', (_event, level, message) => {
       console.log(`[smoke] renderer(${level}): ${message}`);
     });
 
@@ -611,7 +618,85 @@ function fileExists(target) {
 }
 
 function withPresence(item) {
-  return item.status === 'complete' && item.path ? { ...item, missing: !fileExists(item.path) } : item;
+  if (item.status !== 'complete' || !item.path) return item;
+  return { ...item, missing: !fileExists(item.path), ...timingFor(item.gid, item.totalLength) };
+}
+
+/* Move to Trash with Undo. Nothing can reliably restore a file from the
+   Trash (the OS may rename it there), so Dung hides the item at once and
+   only moves the file after TRASH_DELAY; Undo just cancels that. Quitting
+   finishes any pending moves first. */
+const TRASH_DELAY = 7000;
+const pendingTrash = new Map(); // token -> { target, timer }
+const hiddenPaths = new Set();
+let trashSeq = 0;
+
+async function trashPaths(paths) {
+  for (const target of paths) {
+    if (target && fs.existsSync(target)) await shell.trashItem(target);
+  }
+}
+
+async function commitTrash(token) {
+  const pending = pendingTrash.get(token);
+  if (!pending) return;
+  pendingTrash.delete(token);
+  clearTimeout(pending.timer);
+  const { target } = pending;
+  try {
+    // aria2's own progress file goes too, if one is left.
+    await trashPaths([target, `${target}.aria2`]);
+    history = history.filter((entry) => entry.path !== target);
+    writeJson(file('history.json'), history);
+    for (const item of lastPayload.items || []) {
+      if (item.path === target && aria) await aria.clearResult(item.gid);
+    }
+    writeLog(`[trash] moved ${target} to the Trash`);
+  } catch (err) {
+    writeLog(`[trash] failed for ${target}: ${err.message}`);
+    send('file:trash-failed', { path: target, error: err.message });
+  } finally {
+    hiddenPaths.delete(target);
+    existsCache.delete(target);
+    broadcast(true);
+  }
+}
+
+ipcMain.handle('file:trash', (_event, target) => {
+  if (typeof target !== 'string' || !target) return { ok: false };
+  const token = `t${(trashSeq += 1)}`;
+  hiddenPaths.add(target);
+  pendingTrash.set(token, { target, timer: setTimeout(() => commitTrash(token), TRASH_DELAY) });
+  broadcast(true);
+  return { ok: true, token, delay: TRASH_DELAY };
+});
+
+ipcMain.handle('file:untrash', (_event, token) => {
+  const pending = pendingTrash.get(token);
+  if (!pending) return { ok: false };
+  clearTimeout(pending.timer);
+  pendingTrash.delete(token);
+  hiddenPaths.delete(pending.target);
+  broadcast(true);
+  return { ok: true };
+});
+
+/* Cancelling an unfinished download moves what it left behind to the Trash:
+   the partial file and aria2's .aria2 progress file. Only when that progress
+   file exists, i.e. Dung really made the partial — a file of the user's that
+   merely shares the name (a conflict) is never touched. */
+async function trashPartials(item) {
+  if (!item || !item.path) return;
+  const control = `${item.path}.aria2`;
+  // Give aria2 a moment to close the file after removing the download.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  if (!fs.existsSync(control)) return;
+  try {
+    await trashPaths([item.path, control]);
+    writeLog(`[cancel] moved the partial ${path.basename(item.path)} to the Trash`);
+  } catch (err) {
+    writeLog(`[cancel] could not trash the partial ${item.path}: ${err.message}`);
+  }
 }
 
 function broadcast(force = false) {
@@ -625,10 +710,46 @@ function broadcast(force = false) {
         (item) => !conflicts.has(item.gid) && !hiddenResults.has(item.gid)
       ),
       ...externalItems(),
-    ].map(withPresence),
+    ]
+      .filter((item) => !hiddenPaths.has(item.path))
+      .map(withPresence),
     global: lastPayload.global,
-    history: history.map((entry) => ({ ...entry, missing: !fileExists(entry.path) })),
+    history: history
+      .filter((entry) => !hiddenPaths.has(entry.path))
+      .map((entry) => ({ ...entry, missing: !fileExists(entry.path) })),
   });
+}
+
+/* Copied links. Only when Dung's window gets focus (never in the background),
+   only links that look like downloads (magnet, a file extension, a video
+   site Dung handles), each offered once, and not ones already downloading
+   or already on disk. Settings can turn it off. */
+const offeredLinks = new Set();
+
+function linkName(url) {
+  if (/^magnet:/i.test(url)) {
+    const dn = /[?&]dn=([^&]+)/i.exec(url);
+    return dn ? decodeURIComponent(dn[1].replace(/\+/g, ' ')) : 'a torrent';
+  }
+  return nameFromUrl(url);
+}
+
+function checkClipboard() {
+  if (settings.suggestClipboard === false || !win || win.isDestroyed()) return;
+  let text = '';
+  try {
+    text = clipboard.readText().trim();
+  } catch {
+    return;
+  }
+  if (!text || text.length > 4096 || /\s/.test(text)) return;
+  if (!/^(https?:\/\/|magnet:\?)/i.test(text)) return;
+  if (!['direct', 'x', 'extractor'].includes(classify(text))) return;
+  const key = sourceKey(text);
+  if (offeredLinks.has(key)) return;
+  offeredLinks.add(key);
+  if (isBusyUrl(text) || alreadyHave(text)) return;
+  send('clipboard:link', { url: text, name: linkName(text) });
 }
 
 function nameFromUrl(url) {
@@ -736,7 +857,8 @@ async function runExtractorJob(job) {
       job.percent = 100;
       job.path = target;
       job.total = fs.statSync(target).size;
-      recordHistory([{ status: 'complete', path: target, dir: job.dir, name: out, totalLength: job.total, url: job.url }]);
+      trackActivity([{ gid: job.id, status: 'complete' }]);
+      recordHistory([{ gid: job.id, status: 'complete', path: target, dir: job.dir, name: out, totalLength: job.total, url: job.url }]);
     } else {
       job.status = 'error';
       job.error = `yt-dlp exited with code ${code}`;
@@ -754,6 +876,21 @@ function cancelJob(id) {
   if (job.child) job.child.kill('SIGTERM');
   jobs.delete(id);
   broadcast(true);
+  // yt-dlp's partials: <name>.part, .ytdl, fragment files.
+  if (job.status !== 'complete' && job.dir && job.name) {
+    const stem = job.name.replace(/\.[^.]+$/, '');
+    setTimeout(() => {
+      let partials = [];
+      try {
+        partials = fs.readdirSync(job.dir)
+          .filter((entry) => entry.startsWith(stem) && /\.(part|ytdl)$|\.part-Frag\d+/.test(entry))
+          .map((entry) => path.join(job.dir, entry));
+      } catch {
+        /* folder gone */
+      }
+      trashPaths(partials).catch((err) => writeLog(`[cancel] ${err.message}`));
+    }, 800);
+  }
   return true;
 }
 
@@ -771,6 +908,7 @@ function startEngine() {
   engine.on('update', (payload) => {
     if (aria !== engine) return;
     lastPayload = payload;
+    trackActivity([...(payload.items || []), ...externalItems()]);
     // Once aria2 reports a link, its real status decides whether it is busy.
     for (const item of payload.items || []) recentAdds.delete(sourceKey(item.url));
     recordHistory(payload.items);
@@ -823,6 +961,29 @@ function startEngine() {
     });
 }
 
+/* Active download time per download, for the average speed in History.
+   Only time spent actually downloading counts: pauses and waiting in line
+   don't. Sampled on every engine update (~0.7s); the interval that ends in
+   a finish still counts. */
+const activity = new Map(); // gid -> { activeMs, last }
+
+function trackActivity(items) {
+  const now = Date.now();
+  for (const item of items) {
+    const entry = activity.get(item.gid) || { activeMs: 0, last: 0 };
+    if (entry.last) entry.activeMs += Math.min(now - entry.last, 5000);
+    entry.last = item.status === 'active' ? now : 0;
+    activity.set(item.gid, entry);
+  }
+  if (activity.size > 1000) activity.delete(activity.keys().next().value);
+}
+
+function timingFor(gid, size) {
+  const activeMs = (activity.get(gid) || {}).activeMs || 0;
+  // Under a second is too short to say anything meaningful about speed.
+  return activeMs >= 1000 ? { activeMs, avgSpeed: Math.round(size / (activeMs / 1000)) } : { activeMs };
+}
+
 function recordHistory(items) {
   let changed = false;
   for (const item of items) {
@@ -837,6 +998,7 @@ function recordHistory(items) {
       size: item.totalLength,
       url: item.url || '',
       finishedAt: Date.now(),
+      ...timingFor(item.gid, item.totalLength),
     });
     changed = true;
   }
@@ -1376,6 +1538,8 @@ ipcMain.handle('download:remove', async (_event, gid) => {
   await aria.remove(gid);
   await aria.clearResult(gid);
   verified.delete(gid);
+  // Cancelling (not removing a finished one): trash the partial it left.
+  if (gone && gone.status !== 'complete') trashPartials(gone);
   return true;
 });
 
@@ -1468,6 +1632,14 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', async (event) => {
+  // A "Move to Trash" still in its Undo window is done before quitting.
+  if (pendingTrash.size) {
+    event.preventDefault();
+    for (const token of [...pendingTrash.keys()]) await commitTrash(token);
+    app.quit();
+    return;
+  }
+
   if (!aria) return;
 
   const instance = aria;

@@ -1976,8 +1976,9 @@ html[data-transition^='history-']::view-transition-new(root) {
 }
 
 /* The door covers the big idle title, so the corner lockup takes over. */
-.app.door-open .brand-name {
+.app.door-open .brand h1.brand-name {
   display: block;
+  visibility: visible;
 }
 
 .app.door-open .brand-mark .brand-svg {
@@ -2006,4 +2007,37 @@ html[data-transition^='history-']::view-transition-new(root) {
 
 .item[data-missing='true'] .name {
   color: var(--text-dim);
+}
+
+/* ---------- copied-link chip ---------- */
+.clip-chip {
+  width: min(560px, 88%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 8px 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  animation: lane-in var(--t-mid) var(--ease);
+}
+
+.clip-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clip-text b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.app[data-mode='active'] .clip-chip,
+.app[data-mode='lanes'] .clip-chip {
+  order: 1;
 }

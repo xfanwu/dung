@@ -1,6 +1,12 @@
 # Changelog
 
-## 1.7.1 — When a file wanders off
+## 1.8.0 — Tidier finishes
+
+### New
+- **Average speed in History.** Each finished file shows how fast it came in and for how long, e.g. *avg 18.2 MB/s · 5m 12s* — counting only the time it was actually downloading, so pausing doesn't drag the number down.
+- **Copied a download link? Dung offers it.** When you switch to Dung, a link you just copied (a magnet, a file like .zip/.dmg/.pdf, or a video page Dung supports) shows up under the paste box — one click to download. Each link is offered once, Dung never reads your clipboard in the background, and you can turn it off in Settings.
+- **Move to Trash.** Finished files now have **Move to Trash** (with **Undo** for a few seconds), clearly separate from **✕ Remove from list**, which keeps the file.
+- **Cancel cleans up.** Cancelling a download moves its half-downloaded file to the Trash instead of leaving it in your folder.
 
 ### Fixed
 - **Deleted or moved a downloaded file in Finder/Explorer?** Dung now notices. The finish screen and History mark it *wandered off* and offer **Download again**, instead of an Open button that silently did nothing.
