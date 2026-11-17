@@ -2041,3 +2041,7 @@ html[data-transition^='history-']::view-transition-new(root) {
 .app[data-mode='lanes'] .clip-chip {
   order: 1;
 }
+
+.advanced-option {
+  padding: 0;
+}

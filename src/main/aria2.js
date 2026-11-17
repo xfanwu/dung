@@ -199,6 +199,24 @@ class Aria2 extends EventEmitter {
       '--seed-time=0',
     ];
 
+    // DHT: the trackerless way to find peers. Without bootstrap nodes and a
+    // saved routing table a fresh install knows no DHT nodes, so a magnet
+    // link with no trackers could never start. Bootstrap from the standard
+    // public routers (what qBittorrent/Transmission use) and keep the table in
+    // Dung's data folder so later launches find peers faster.
+    if (options.dhtDir) {
+      fs.mkdirSync(options.dhtDir, { recursive: true });
+      args.push(
+        '--enable-dht=true',
+        '--enable-dht6=true',
+        '--dht-entry-point=router.bittorrent.com:6881',
+        '--dht-entry-point6=dht.libtorrent.org:25401',
+        `--dht-file-path=${path.join(options.dhtDir, 'dht.dat')}`,
+        `--dht-file-path6=${path.join(options.dhtDir, 'dht6.dat')}`,
+        '--enable-peer-exchange=true'
+      );
+    }
+
     if (options.sessionFile) {
       fs.mkdirSync(path.dirname(options.sessionFile), { recursive: true });
       const hasSession =

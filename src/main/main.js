@@ -16,6 +16,7 @@ const { installAria2 } = require('./installer');
 const { resolveX, isXUrl } = require('./resolvers/x');
 const { checkForUpdates, pickAsset, downloadFile } = require('./updater');
 const { prepareUpdate, launchDetached } = require('./self-update');
+const { loadTrackers } = require('./trackers');
 const { isExtractorUrl, findYtDlp, findFfmpeg, downloadUrl: ytdlpDownloadUrl, probe, startDownload, safeName } = require('./ytdlp');
 const { classify } = require('./routing');
 
@@ -31,6 +32,7 @@ const DEFAULTS = {
   aria2Path: '',
   ytdlpPath: '',
   suggestClipboard: true,
+  publicTrackers: false,
 };
 
 let settings = { ...DEFAULTS };
@@ -943,7 +945,7 @@ function startEngine() {
   });
 
   return engine
-    .start({ ...settings, dir: settings.dir, sessionFile: file('aria2.session') })
+    .start({ ...settings, dir: settings.dir, sessionFile: file('aria2.session'), dhtDir: file('dht') })
     .then((info) => {
       engineRestarts = 0;
       if (aria === engine) {
@@ -1274,6 +1276,8 @@ ipcMain.handle('settings:update', async (_event, patch) => {
     return settings;
   }
 
+  if (patch.publicTrackers) publicTrackerList().catch(() => {});
+
   if (aria && aria.running) {
     const options = {};
     if ('connections' in patch) options['max-connection-per-server'] = String(settings.connections);
@@ -1292,6 +1296,16 @@ ipcMain.handle('settings:update', async (_event, patch) => {
 
   return settings;
 });
+
+/* ---------- public trackers (opt-in) ---------- */
+
+// Read from the small cache file each time (refreshed online every few days).
+// Note: aria2 treats extra trackers as a fallback list after the magnet's own
+// (BEP 12): it announces to the first one that answers. So these mostly help
+// magnets with no trackers or dead ones, which is the point.
+function publicTrackerList() {
+  return loadTrackers(file('trackers.json'), { onLog: (line) => send('engine:log', line) });
+}
 
 /* ---------- duplicate links ----------
    Pasting the same link again while it is still downloading must not start a
@@ -1459,6 +1473,15 @@ async function addDownloads({ urls, options: rawOptions }, claimed) {
     claimed.push(sourceKey(entry.url));
     const target = { dir: settings.dir, ...options };
     if (entry.out) target.out = entry.out;
+    // Public trackers (opt-in) for magnet links only: private-tracker torrents
+    // come as .torrent files and must never be announced to public trackers.
+    if (settings.publicTrackers && /^magnet:/i.test(entry.url)) {
+      const trackers = await publicTrackerList();
+      if (trackers.length) {
+        target['bt-tracker'] = trackers.join(',');
+        send('engine:log', `[trackers] adding ${trackers.length} public trackers to a magnet link`);
+      }
+    }
 
     try {
       gids.push(await aria.add([entry.url], target));
