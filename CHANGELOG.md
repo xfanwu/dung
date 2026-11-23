@@ -4,6 +4,7 @@
 
 ### New
 - **Magnet links without trackers now start.** Dung joins the BitTorrent DHT properly (well-known bootstrap nodes, IPv4 and IPv6, and it remembers what it learns), so a bare `magnet:?xt=urn:btih:…` can find peers instead of sitting on *sniffing it out…*.
+- **Pinterest videos.** Pinterest pins (any country domain, and `pin.it` short links) are recognised as a video site: they go straight to video support and a copied pin is offered with one click.
 - **Optional public trackers** (Settings → Advanced → *Find more peers with public trackers*, off by default). Adds a well-known public tracker list to **magnet links** when their own trackers are missing or dead. Never added to `.torrent` files, so private trackers stay safe. The list is refreshed every few days, with a built-in fallback.
 
 ## 1.8.0 — Tidier finishes

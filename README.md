@@ -31,7 +31,7 @@ Press <kbd>⌘</kbd><kbd>V</kbd> anywhere in the window — or drop a link on it
 
 - **Nothing to set up.** The downloader lives inside the app. Open it and paste.
 - **Files that open.** Safe defaults stop the silent corruption big downloads suffer elsewhere — and it never overwrites your files.
-- **Video pages too.** X, TikTok, Instagram and ~1,750 other sites.
+- **Video pages too.** X, TikTok, Instagram, Pinterest and ~1,750 other sites.
 - **Private.** No account, no cookies, no telemetry.
 - **Speaks beetle.** Downloads are *rolling*, then *rolled home*.
 

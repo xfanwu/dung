@@ -457,6 +457,10 @@ async function main() {
   await u.click('#clip-go');
   await u.waitFor(() => (window.__items || []).some((i) => i.name === 'copied.zip' && i.status === 'complete'), null, 15000).catch(() => {});
   check('one click on the chip downloads it', files().includes('copied.zip'));
+  await copyAndFocus('https://www.pinterest.com/pin/687854543117954142/');
+  await sleep(800);
+  check('a copied Pinterest pin is offered', offers.includes('https://www.pinterest.com/pin/687854543117954142/'));
+  await u.click('#clip-x');
   await u.ev(() => window.api.updateSettings({ suggestClipboard: false }));
   await copyAndFocus(`${base}/small/off.zip`);
   await sleep(800);
