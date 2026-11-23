@@ -25,6 +25,10 @@ const SUPPORTED = [
   /^https?:\/\/fb\.watch\//i,
   /^https?:\/\/(?:www\.)?twitch\.tv\//i,
   /^https?:\/\/(?:www\.)?bilibili\.com\//i,
+  // Pinterest: every country domain (pinterest.com, .co.uk, .de, .com.au …)
+  // and pin.it short links.
+  /^https?:\/\/(?:[a-z]{2,3}\.)?pinterest\.(?:com|ca|ch|cl|de|dk|es|fr|ie|it|jp|nz|pt|se|at|co\.uk|co\.kr|com\.au|com\.mx)\//i,
+  /^https?:\/\/pin\.it\//i,
 ];
 
 function isExtractorUrl(url) {

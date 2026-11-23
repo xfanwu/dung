@@ -33,9 +33,14 @@ function makeTorrent(file, announce, pieceLength = 256 * 1024) {
 }
 
 function startTracker() {
-  const peers = new Map(); // "ip:port" -> Buffer(6)
+  // Peers are kept per torrent (info hash), like a real tracker: handing out
+  // every peer regardless of torrent lets unrelated swarms connect in tests.
+  const swarms = new Map(); // info_hash (raw, as sent) -> Map("ip:port" -> Buffer(6))
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
+    const hash = (/[?&]info_hash=([^&]+)/.exec(req.url) || [])[1] || '';
+    const peers = swarms.get(hash) || new Map();
+    swarms.set(hash, peers);
     const port = Number(url.searchParams.get('port'));
     if (port) {
       const ip = '127.0.0.1';
@@ -81,6 +86,8 @@ async function startSwarm({ aria2c, workDir, size = 3 * 1024 * 1024, name = 'swa
   const magnet = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(name)}&tr=${encodeURIComponent(announce)}`;
   return {
     magnet,
+    announce,
+    torrentFile,
     infoHash,
     file,
     size,

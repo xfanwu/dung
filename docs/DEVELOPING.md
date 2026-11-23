@@ -103,6 +103,13 @@ feature that half-works and leaks an account, the app declines the link outright
 
 > YouTube downloading is not supported due to restrictions from YouTube's side.
 
+## BitTorrent
+
+- **DHT** is bootstrapped from `router.bittorrent.com:6881` (IPv4) and `dht.libtorrent.org:25401` (IPv6), and its routing table is kept in the app data folder (`dht/dht.dat`, `dht/dht6.dat`). Peer exchange is on; local peer discovery is off. aria2 logs a one-time error on first launch when those files don't exist yet.
+- **Seeding** stops when a torrent finishes (`--seed-time=0`).
+- **Public trackers** (opt-in): `src/main/trackers.js` loads ngosang/trackerslist "best" (raw.githubusercontent.com, then a jsDelivr mirror), caches it in `trackers.json` for 3 days, and falls back to a built-in list. They are passed per download as `bt-tracker`, **only for magnet links**. aria2 treats extra trackers as a fallback after the magnet's own (BEP 12), so they matter mostly for trackerless or dead-tracker magnets.
+- Tests: `scripts/lib/swarm.js` runs a local swarm (generated torrent, per-info-hash HTTP tracker, a seeding aria2c).
+
 ## Supported sites
 
 Routing is by shape, not by a hand-maintained whitelist:

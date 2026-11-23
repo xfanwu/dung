@@ -457,12 +457,78 @@ async function main() {
   await u.click('#clip-go');
   await u.waitFor(() => (window.__items || []).some((i) => i.name === 'copied.zip' && i.status === 'complete'), null, 15000).catch(() => {});
   check('one click on the chip downloads it', files().includes('copied.zip'));
+  await copyAndFocus('https://www.pinterest.com/pin/687854543117954142/');
+  await sleep(800);
+  check('a copied Pinterest pin is offered', offers.includes('https://www.pinterest.com/pin/687854543117954142/'));
+  await u.click('#clip-x');
   await u.ev(() => window.api.updateSettings({ suggestClipboard: false }));
   await copyAndFocus(`${base}/small/off.zip`);
   await sleep(800);
   check('Settings can turn suggestions off', !offers.some((x) => x.endsWith('off.zip')));
   await u.ev(() => window.api.updateSettings({ suggestClipboard: true }));
   await u.clearAll();
+
+  // 21. DHT is bootstrapped; public trackers (opt-in) go to magnet links only
+  const ariaArgs = execFileSync('ps', ['-eo', 'args']).toString().split('\n').find((l) => l.includes(ARIA2C) && l.includes('--enable-rpc')) || '';
+  check('aria2 runs with DHT bootstrap nodes and a saved routing table',
+    /--enable-dht=true/.test(ariaArgs) && /--enable-dht6=true/.test(ariaArgs) && /--dht-entry-point=router\.bittorrent\.com:6881/.test(ariaArgs) && /--dht-file-path=\S*dht\.dat/.test(ariaArgs),
+    ariaArgs.replace(/--rpc-secret=\S+/, '--rpc-secret=…').slice(0, 400));
+
+  // Three separate swarms (different files, so different info hashes): aria2
+  // refuses a second download of an info hash it still has registered, which
+  // would let one sub-test leak into the next.
+  const { startSwarm: startSwarm2, makeTorrent } = require('./lib/swarm');
+  const mkSwarm = (name) => startSwarm2({ aria2c: ARIA2C, workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'dung-swarm2-')), name });
+  const swarmOff = await mkSwarm('no-trackers.bin');
+  const swarmOn = await mkSwarm('with-trackers.bin');
+  const swarmPrivate = await mkSwarm('private.bin');
+  const setPublicList = (announces) => {
+    for (const dir of [path.join(home, '.config', 'dung'), path.join(home, 'Library', 'Application Support', 'dung'), path.join(home, 'AppData', 'dung')]) {
+      fs.writeFileSync(path.join(dir, 'trackers.json'), JSON.stringify({ at: Date.now(), trackers: announces }));
+    }
+  };
+  // aria2 creates the target file (plus a .aria2) as soon as it starts, so
+  // "finished" means complete status, full size and no progress file.
+  const finished = async (name, size) => (await u.items()).some((i) => i.name === name && i.status === 'complete') && fs.existsSync(path.join(dl, name)) && !fs.existsSync(path.join(dl, `${name}.aria2`)) && fs.statSync(path.join(dl, name)).size === size;
+  const bare = (sw, name) => `magnet:?xt=urn:btih:${sw.infoHash}&dn=${name}`;
+  try {
+    // aria2 announces to extra trackers as a fallback list (first one that
+    // answers wins, BEP 12), so each phase's "public list" is the one tracker
+    // that phase needs.
+    setPublicList([swarmOn.announce]);
+
+    await u.ev(() => window.api.updateSettings({ publicTrackers: false }));
+    await u.paste(bare(swarmOff, 'no-trackers.bin'));
+    await sleep(12000);
+    check('trackerless magnet with public trackers off finds no peers', !(await finished('no-trackers.bin', swarmOff.size)));
+
+    await u.ev(() => window.api.updateSettings({ publicTrackers: true }));
+    await u.paste(bare(swarmOn, 'with-trackers.bin'));
+    await u.waitFor(() => (window.__items || []).some((i) => i.name === 'with-trackers.bin' && i.status === 'complete'), null, 60000).catch(() => {});
+    await sleep(1000);
+    check('a trackerless magnet with public trackers on downloads', await finished('with-trackers.bin', swarmOn.size), JSON.stringify((await u.items()).filter((i) => i.torrent).map((i) => `${i.name}:${i.status}`)));
+
+    // A .torrent file (as private trackers hand out) must not get them: its
+    // own announce points nowhere, so without public trackers it can't start.
+    // Make its seeder's tracker the "public list": if it leaked, it would download.
+    setPublicList([swarmPrivate.announce]);
+    const deadTorrent = makeTorrent(swarmPrivate.file, 'http://127.0.0.1:9/announce').torrent;
+    const torrentServer = await new Promise((resolve) => {
+      const srv = http.createServer((req, res) => res.end(deadTorrent)).listen(0, '127.0.0.1', () => resolve(srv));
+    });
+    await u.paste(`http://127.0.0.1:${torrentServer.address().port}/private.torrent`);
+    await sleep(15000);
+    const priv = (await u.items()).find((i) => i.torrent && i.name === 'private.bin');
+    check('a .torrent file never gets the public trackers', Boolean(priv) && !(await finished('private.bin', swarmPrivate.size)), priv && `${priv.status} ${priv.completedLength}/${priv.totalLength}`);
+    torrentServer.close();
+  } finally {
+    swarmOff.stop();
+    swarmOn.stop();
+    swarmPrivate.stop();
+    await u.ev(() => window.api.updateSettings({ publicTrackers: false }));
+  }
+  await u.clearAll();
+  await sleep(6000); // aria2 saves its session every 5s; let it forget them
 
   // 14. Restart the app: finished results are old news
   await app.close();
