@@ -131,11 +131,17 @@ async function vendorWindows() {
   freshDir(work);
 
   if (process.platform === 'win32') {
+    // Expand-Archive is unreliable across Windows runner images: some ship a
+    // PowerShell whose Archive module calls a ZipFile.ExtractToDirectory
+    // overload that does not resolve ("Cannot find an overload ... argument
+    // count: 3"). Call .NET directly with the two-argument form instead.
+    // freshDir() above already emptied `work`, so no overwrite is needed.
     sh('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${work}' -Force`,
+      `Add-Type -AssemblyName System.IO.Compression.FileSystem; ` +
+        `[System.IO.Compression.ZipFile]::ExtractToDirectory('${zip}', '${work}')`,
     ]);
   } else {
     sh('unzip', ['-q', zip, '-d', work]);
