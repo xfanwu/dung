@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('state:get'),
   installEngine: () => ipcRenderer.invoke('engine:install'),
   restartEngine: () => ipcRenderer.invoke('engine:restart'),
+  toolStatus: () => ipcRenderer.invoke('tools:status'),
   installExtractor: () => ipcRenderer.invoke('extractor:install'),
   checkUpdates: () => ipcRenderer.invoke('update:check'),
   downloadUpdate: () => ipcRenderer.invoke('update:download'),

@@ -4,6 +4,7 @@
 
 ### Fixed
 - **"yt-dlp not found" on the first video link** (Pinterest, YouTube, X…). Dung now fetches its free video helper automatically the first time you paste a video page, then carries on with the download — no error, no extra button.
+- **Auto-detect in Settings → Advanced now shows what it found.** Under the yt-dlp and aria2 fields Dung says which copy it is using (built in, fetched, or a path like `/opt/homebrew/bin/yt-dlp`) or that none was found. A path that can't be run is refused with a message instead of being silently ignored, and pasted paths with quotes, `~` or `\ ` escapes now work. yt-dlp is also found in `~/.local/bin`, MacPorts, winget, Scoop and Chocolatey.
 
 ## 1.8.1 — Better at finding peers
 

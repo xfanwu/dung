@@ -1276,7 +1276,52 @@ ipcMain.handle('state:get', () => ({
   status: lastStatus,
 }));
 
+/* Helper locations (Settings → Advanced). An empty field means auto-detect;
+   people paste paths in many shapes ("~/bin/x", '"/a b/x"', "/a\\ b/x"),
+   so normalise before checking, and refuse a path that cannot be run instead
+   of silently ignoring it. */
+function normalizeToolPath(value) {
+  let text = String(value || '').trim().replace(/^(['"])(.*)\1$/, '$2');
+  if (process.platform !== 'win32') text = text.replace(/\\ /g, ' ');
+  if (text === '~' || text.startsWith('~/')) text = path.join(app.getPath('home'), text.slice(1));
+  return text;
+}
+
+function runnable(candidate) {
+  try {
+    if (!fs.statSync(candidate).isFile()) return false;
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function toolStatus() {
+  const bundled = path.join(process.resourcesPath || '', 'bin');
+  const describe = (custom, found) => ({
+    custom,
+    customOk: !custom || runnable(custom),
+    path: found || '',
+    bundled: Boolean(found && path.dirname(found) === bundled),
+    fetched: Boolean(found && path.dirname(found) === file('bin')),
+  });
+  return {
+    aria2: describe(settings.aria2Path, (aria && aria.binary) || findAria2(settings.aria2Path)),
+    ytdlp: describe(settings.ytdlpPath, findYtDlp(settings.ytdlpPath, file('bin'))),
+  };
+}
+
+ipcMain.handle('tools:status', () => toolStatus());
+
 ipcMain.handle('settings:update', async (_event, patch) => {
+  for (const key of ['aria2Path', 'ytdlpPath']) {
+    if (!(key in patch)) continue;
+    patch[key] = normalizeToolPath(patch[key]);
+    if (patch[key] && !runnable(patch[key])) {
+      throw new Error(`Can't run ${patch[key]}. Pick the program file itself, or leave it empty to auto-detect.`);
+    }
+  }
   // aria2 rejects anything but bytes or a K/M/G suffix; never store junk.
   if ('globalLimit' in patch && !/^\d+[KMG]?$/i.test(String(patch.globalLimit || '0'))) {
     throw new Error('Speed limit must look like 500K or 5M.');

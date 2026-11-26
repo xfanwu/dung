@@ -920,7 +920,8 @@ function shortError(message) {
 }
 
 function describeError(message) {
-  const text = String(message || '');
+  // Errors thrown in main arrive wrapped: "Error invoking remote method 'x': Error: …".
+  const text = String(message || '').replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, '');
   const match = text.match(FILE_EXISTS);
   if (!match) return { text, reveal: '' };
 
@@ -1058,6 +1059,31 @@ function fillSettingsForm() {
   $('#set-binary').value = state.settings.aria2Path || '';
   $('#set-ytdlp').value = state.settings.ytdlpPath || '';
   updateConnHint();
+  refreshToolStatus();
+}
+
+// Says what auto-detect found (or why a typed path isn't used).
+async function refreshToolStatus() {
+  let status;
+  try {
+    status = await window.api.toolStatus();
+  } catch {
+    return;
+  }
+  const line = (el, tool, missing) => {
+    let text;
+    if (tool.custom && !tool.customOk) text = `Can't run this file, so it is ignored. Using: ${tool.path || 'nothing found'}`;
+    else if (!tool.path) text = missing;
+    else if (tool.custom) text = 'Using the file above.';
+    else if (tool.bundled) text = 'Found: the copy built into Dung.';
+    else if (tool.fetched) text = `Found: the copy Dung fetched (${tool.path}).`;
+    else text = `Found: ${tool.path}`;
+    el.textContent = text;
+    el.title = tool.path;
+    el.classList.toggle('is-bad', Boolean((tool.custom && !tool.customOk) || !tool.path));
+  };
+  line($('#aria2-status'), status.aria2, 'Not found. Leave empty to use the copy built into Dung.');
+  line($('#ytdlp-status'), status.ytdlp, 'Not found yet. Dung fetches it the first time you paste a video link.');
 }
 
 function closeSettings() {
@@ -1374,8 +1400,13 @@ $('#set-limit').addEventListener('change', async (event) => {
 $('#set-verify').addEventListener('change', (event) => save({ verifyDmg: event.target.checked }));
 $('#set-clip').addEventListener('change', (event) => save({ suggestClipboard: event.target.checked }));
 $('#set-trackers').addEventListener('change', (event) => save({ publicTrackers: event.target.checked }));
-$('#set-binary').addEventListener('change', (event) => save({ aria2Path: event.target.value.trim() }));
-$('#set-ytdlp').addEventListener('change', (event) => save({ ytdlpPath: event.target.value.trim() }));
+async function saveToolPath(input, key) {
+  await save({ [key]: input.value.trim() });
+  input.value = state.settings[key] || '';
+  refreshToolStatus();
+}
+$('#set-binary').addEventListener('change', (event) => saveToolPath(event.target, 'aria2Path'));
+$('#set-ytdlp').addEventListener('change', (event) => saveToolPath(event.target, 'ytdlpPath'));
 
 
 /* ---------- engine wiring ---------- */

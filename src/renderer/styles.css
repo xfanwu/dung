@@ -2045,3 +2045,15 @@ html[data-transition^='history-']::view-transition-new(root) {
 .advanced-option {
   padding: 0;
 }
+
+/* Under each helper-location field: what Dung actually found. */
+.tool-status {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.tool-status.is-bad {
+  color: var(--danger);
+}
