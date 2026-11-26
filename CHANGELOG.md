@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.8.2 — Video links just work
+
+### Fixed
+- **"yt-dlp not found" on the first video link** (Pinterest, YouTube, X…). Dung now fetches its free video helper automatically the first time you paste a video page, then carries on with the download — no error, no extra button.
+
 ## 1.8.1 — Better at finding peers
 
 ### New

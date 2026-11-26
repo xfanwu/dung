@@ -792,8 +792,17 @@ function createProbeJob(url) {
 }
 
 async function runExtractorJob(job) {
-  const binary = findYtDlp(settings.ytdlpPath, file('bin'));
-  if (!binary) throw new Error('yt-dlp not found. It is required for this site.');
+  let binary = findYtDlp(settings.ytdlpPath, file('bin'));
+  if (!binary) {
+    // First video link: fetch yt-dlp (free, one-time) instead of failing.
+    send('engine:log', '[yt-dlp] not installed yet, fetching it once');
+    try {
+      binary = await installYtDlp();
+    } catch (err) {
+      throw new Error(`Could not add video support: ${err.message}`);
+    }
+    if (job.cancelled) return;
+  }
 
   send('engine:log', `[yt-dlp] probing ${job.url}`);
 
@@ -1091,24 +1100,32 @@ ipcMain.handle('engine:restart', async () => {
   return info ? { ok: true } : { ok: false, error: lastStatus.error };
 });
 
-ipcMain.handle('extractor:install', async () => {
-  const dest = path.join(file('bin'), process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-
-  try {
+// One shared download, so two video links pasted together fetch yt-dlp once.
+let ytdlpInstall = null;
+function installYtDlp() {
+  if (ytdlpInstall) return ytdlpInstall;
+  ytdlpInstall = (async () => {
+    const dest = path.join(file('bin'), process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
     send('engine:log', `[yt-dlp] downloading ${ytdlpDownloadUrl()}`);
     await downloadFile(ytdlpDownloadUrl(), dest, {
       onProgress: (received) => {
         if (received % (10 * 1048576) < 65536) send('engine:log', `[yt-dlp] ${(received / 1048576).toFixed(1)} MB`);
       },
     });
-
     if (process.platform !== 'win32') fs.chmodSync(dest, 0o755);
-
     settings.ytdlpPath = dest;
     writeJson(file('settings.json'), settings);
+    return dest;
+  })().finally(() => {
+    ytdlpInstall = null;
+  });
+  return ytdlpInstall;
+}
 
-    return { ok: true, binary: dest };
+ipcMain.handle('extractor:install', async () => {
+  try {
+    return { ok: true, binary: await installYtDlp() };
   } catch (err) {
     return { ok: false, error: err.message };
   }
