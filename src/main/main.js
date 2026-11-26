@@ -792,8 +792,17 @@ function createProbeJob(url) {
 }
 
 async function runExtractorJob(job) {
-  const binary = findYtDlp(settings.ytdlpPath, file('bin'));
-  if (!binary) throw new Error('yt-dlp not found. It is required for this site.');
+  let binary = findYtDlp(settings.ytdlpPath, file('bin'));
+  if (!binary) {
+    // First video link: fetch yt-dlp (free, one-time) instead of failing.
+    send('engine:log', '[yt-dlp] not installed yet, fetching it once');
+    try {
+      binary = await installYtDlp();
+    } catch (err) {
+      throw new Error(`Could not add video support: ${err.message}`);
+    }
+    if (job.cancelled) return;
+  }
 
   send('engine:log', `[yt-dlp] probing ${job.url}`);
 
@@ -1091,24 +1100,32 @@ ipcMain.handle('engine:restart', async () => {
   return info ? { ok: true } : { ok: false, error: lastStatus.error };
 });
 
-ipcMain.handle('extractor:install', async () => {
-  const dest = path.join(file('bin'), process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-
-  try {
+// One shared download, so two video links pasted together fetch yt-dlp once.
+let ytdlpInstall = null;
+function installYtDlp() {
+  if (ytdlpInstall) return ytdlpInstall;
+  ytdlpInstall = (async () => {
+    const dest = path.join(file('bin'), process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
     send('engine:log', `[yt-dlp] downloading ${ytdlpDownloadUrl()}`);
     await downloadFile(ytdlpDownloadUrl(), dest, {
       onProgress: (received) => {
         if (received % (10 * 1048576) < 65536) send('engine:log', `[yt-dlp] ${(received / 1048576).toFixed(1)} MB`);
       },
     });
-
     if (process.platform !== 'win32') fs.chmodSync(dest, 0o755);
-
     settings.ytdlpPath = dest;
     writeJson(file('settings.json'), settings);
+    return dest;
+  })().finally(() => {
+    ytdlpInstall = null;
+  });
+  return ytdlpInstall;
+}
 
-    return { ok: true, binary: dest };
+ipcMain.handle('extractor:install', async () => {
+  try {
+    return { ok: true, binary: await installYtDlp() };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -1259,7 +1276,52 @@ ipcMain.handle('state:get', () => ({
   status: lastStatus,
 }));
 
+/* Helper locations (Settings → Advanced). An empty field means auto-detect;
+   people paste paths in many shapes ("~/bin/x", '"/a b/x"', "/a\\ b/x"),
+   so normalise before checking, and refuse a path that cannot be run instead
+   of silently ignoring it. */
+function normalizeToolPath(value) {
+  let text = String(value || '').trim().replace(/^(['"])(.*)\1$/, '$2');
+  if (process.platform !== 'win32') text = text.replace(/\\ /g, ' ');
+  if (text === '~' || text.startsWith('~/')) text = path.join(app.getPath('home'), text.slice(1));
+  return text;
+}
+
+function runnable(candidate) {
+  try {
+    if (!fs.statSync(candidate).isFile()) return false;
+    fs.accessSync(candidate, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function toolStatus() {
+  const bundled = path.join(process.resourcesPath || '', 'bin');
+  const describe = (custom, found) => ({
+    custom,
+    customOk: !custom || runnable(custom),
+    path: found || '',
+    bundled: Boolean(found && path.dirname(found) === bundled),
+    fetched: Boolean(found && path.dirname(found) === file('bin')),
+  });
+  return {
+    aria2: describe(settings.aria2Path, (aria && aria.binary) || findAria2(settings.aria2Path)),
+    ytdlp: describe(settings.ytdlpPath, findYtDlp(settings.ytdlpPath, file('bin'))),
+  };
+}
+
+ipcMain.handle('tools:status', () => toolStatus());
+
 ipcMain.handle('settings:update', async (_event, patch) => {
+  for (const key of ['aria2Path', 'ytdlpPath']) {
+    if (!(key in patch)) continue;
+    patch[key] = normalizeToolPath(patch[key]);
+    if (patch[key] && !runnable(patch[key])) {
+      throw new Error(`Can't run ${patch[key]}. Pick the program file itself, or leave it empty to auto-detect.`);
+    }
+  }
   // aria2 rejects anything but bytes or a K/M/G suffix; never store junk.
   if ('globalLimit' in patch && !/^\d+[KMG]?$/i.test(String(patch.globalLimit || '0'))) {
     throw new Error('Speed limit must look like 500K or 5M.');

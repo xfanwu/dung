@@ -15,6 +15,7 @@
 
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const SUPPORTED = [
@@ -44,9 +45,19 @@ function findYtDlp(preferred, binDir) {
   const candidates = [
     preferred,
     binDir ? path.join(binDir, name) : null,
+    // GUI apps on macOS don't get the shell's PATH, so name the usual homes.
     '/opt/homebrew/bin/yt-dlp',
     '/usr/local/bin/yt-dlp',
+    '/opt/local/bin/yt-dlp',
     '/usr/bin/yt-dlp',
+    path.join(os.homedir(), '.local', 'bin', name),
+    ...(process.platform === 'win32'
+      ? [
+          path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', name),
+          path.join(process.env.USERPROFILE || '', 'scoop', 'shims', name),
+          path.join(process.env.ProgramData || '', 'chocolatey', 'bin', name),
+        ]
+      : []),
     ...(process.env.PATH || '')
       .split(path.delimiter)
       .filter(Boolean)

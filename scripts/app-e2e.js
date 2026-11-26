@@ -320,6 +320,23 @@ async function main() {
   }, `${base}/small/behind.bin`);
   await sleep(1200);
   check('paste behind Settings is ignored', !(await u.items()).some((i) => i.name === 'behind.bin'));
+  await sleep(500);
+  const ariaStatus = await u.ev(() => document.querySelector('#aria2-status').textContent);
+  check('Advanced says which aria2 is in use', /^(Found: |Using the file above)/.test(ariaStatus), ariaStatus);
+  const badPath = await u.ev(async () => {
+    try {
+      await window.api.updateSettings({ ytdlpPath: '/definitely/not/here/yt-dlp' });
+      return 'saved';
+    } catch (err) {
+      return err.message;
+    }
+  });
+  check('a helper path that cannot run is refused, not silently ignored', /can't run/i.test(badPath), badPath);
+  const ariaBefore = await u.ev(() => window.api.getState().then((s) => s.settings.aria2Path));
+  const quoted = await u.ev((p) => window.api.updateSettings({ aria2Path: `"${p}"` }).then((s) => s.aria2Path), ARIA2C);
+  check('a quoted helper path is accepted as the plain path', quoted === ARIA2C, quoted);
+  await u.ev((p) => window.api.updateSettings({ aria2Path: p }), ariaBefore);
+  await sleep(1500);
   await u.click('#settings-done');
 
   // 13. aria2 crashes mid-download -> recovers on its own
